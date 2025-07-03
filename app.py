@@ -384,54 +384,57 @@ def load_channel_config():
         st.error(f"Error loading channel config: {e}")
         return {}
 
+def save_stream_config(streams_df):
+    """Save stream configuration to JSON"""
+    try:
+        streams_data = streams_df.to_dict('records')
+        config = {
+            'streams': streams_data,
+            'last_updated': datetime.datetime.now().isoformat()
+        }
+        with open('streams_config.json', 'w') as f:
+            json.dump(config, f, indent=2)
+    except Exception as e:
+        st.error(f"Error saving stream config: {e}")
+
+def load_stream_config():
+    """Load stream configuration from JSON"""
+    try:
+        if os.path.exists('streams_config.json'):
+            with open('streams_config.json', 'r') as f:
+                config = json.load(f)
+                streams_data = config.get('streams', [])
+                if streams_data:
+                    df = pd.DataFrame(streams_data)
+                    # Ensure all required columns exist
+                    required_columns = ['Video', 'Streaming Key', 'Jam Mulai', 'Status', 'PID', 'Is Shorts', 'Quality', 'Broadcast ID', 'Channel']
+                    for col in required_columns:
+                        if col not in df.columns:
+                            if col == 'Channel':
+                                df[col] = 'default'
+                            elif col in ['Video', 'Streaming Key', 'Jam Mulai', 'Status', 'Broadcast ID']:
+                                df[col] = ''
+                            elif col == 'Is Shorts':
+                                df[col] = False
+                            elif col == 'Quality':
+                                df[col] = '720p'
+                            else:
+                                df[col] = 0
+                    return df
+        return pd.DataFrame(columns=['Video', 'Streaming Key', 'Jam Mulai', 'Status', 'PID', 'Is Shorts', 'Quality', 'Broadcast ID', 'Channel'])
+    except Exception as e:
+        st.error(f"Error loading stream config: {e}")
+        return pd.DataFrame(columns=['Video', 'Streaming Key', 'Jam Mulai', 'Status', 'PID', 'Is Shorts', 'Quality', 'Broadcast ID', 'Channel'])
+
 # Initialize session state
 if 'streams' not in st.session_state:
-    st.session_state.streams = pd.DataFrame(columns=[
-        'Video', 'Streaming Key', 'Jam Mulai', 'Status', 'PID', 'Is Shorts', 'Quality', 'Broadcast ID', 'Channel'
-    ])
+    st.session_state.streams = load_stream_config()
 
 if 'processes' not in st.session_state:
     st.session_state.processes = {}
 
 if 'channel_configs' not in st.session_state:
     st.session_state.channel_configs = load_channel_config()
-
-def save_persistent_streams(df):
-    """Save streams to persistent storage"""
-    try:
-        df.to_csv('persistent_streams.csv', index=False)
-    except Exception as e:
-        st.error(f"Error saving streams: {e}")
-
-def load_persistent_streams():
-    """Load streams from persistent storage"""
-    try:
-        if os.path.exists('persistent_streams.csv'):
-            df = pd.read_csv('persistent_streams.csv')
-            # Ensure all required columns exist
-            required_columns = ['Video', 'Streaming Key', 'Jam Mulai', 'Status', 'PID', 'Is Shorts', 'Quality', 'Broadcast ID', 'Channel']
-            for col in required_columns:
-                if col not in df.columns:
-                    if col == 'Channel':
-                        df[col] = 'default'
-                    elif col in ['Video', 'Streaming Key', 'Jam Mulai', 'Status', 'Broadcast ID']:
-                        df[col] = ''
-                    elif col == 'Is Shorts':
-                        df[col] = False
-                    elif col == 'Quality':
-                        df[col] = '720p'
-                    else:
-                        df[col] = 0
-            return df
-        else:
-            return pd.DataFrame(columns=['Video', 'Streaming Key', 'Jam Mulai', 'Status', 'PID', 'Is Shorts', 'Quality', 'Broadcast ID', 'Channel'])
-    except Exception as e:
-        st.error(f"Error loading streams: {e}")
-        return pd.DataFrame(columns=['Video', 'Streaming Key', 'Jam Mulai', 'Status', 'PID', 'Is Shorts', 'Quality', 'Broadcast ID', 'Channel'])
-
-# Load persistent streams on startup
-if st.session_state.streams.empty:
-    st.session_state.streams = load_persistent_streams()
 
 def get_video_files():
     """Get list of video files from current directory and videos folder"""
@@ -506,7 +509,7 @@ def run_ffmpeg(video_path, streaming_key, is_shorts=False, stream_index=None, qu
             st.session_state.processes[stream_index] = process
             st.session_state.streams.loc[stream_index, 'PID'] = process.pid
             st.session_state.streams.loc[stream_index, 'Status'] = 'Sedang Live'
-            save_persistent_streams(st.session_state.streams)
+            save_stream_config(st.session_state.streams)
         
         # Auto-start YouTube broadcast if broadcast_id is provided
         if broadcast_id:
@@ -529,7 +532,7 @@ def run_ffmpeg(video_path, streaming_key, is_shorts=False, stream_index=None, qu
                     del st.session_state.processes[stream_index]
                     st.session_state.streams.loc[stream_index, 'Status'] = 'Selesai'
                     st.session_state.streams.loc[stream_index, 'PID'] = 0
-                    save_persistent_streams(st.session_state.streams)
+                    save_stream_config(st.session_state.streams)
                     
                     # Auto-stop YouTube broadcast
                     if broadcast_id:
@@ -576,7 +579,7 @@ def stop_stream(stream_index):
             del st.session_state.processes[stream_index]
             st.session_state.streams.loc[stream_index, 'Status'] = 'Dihentikan'
             st.session_state.streams.loc[stream_index, 'PID'] = 0
-            save_persistent_streams(st.session_state.streams)
+            save_stream_config(st.session_state.streams)
             
             # Stop YouTube broadcast
             if broadcast_id and broadcast_id != '':
@@ -603,7 +606,7 @@ def check_scheduled_streams():
                 channel_name = row.get('Channel', 'default')
                 if start_stream(row['Video'], row['Streaming Key'], row.get('Is Shorts', False), idx, quality, broadcast_id, channel_name):
                     st.session_state.streams.loc[idx, 'Jam Mulai'] = current_time
-                    save_persistent_streams(st.session_state.streams)
+                    save_stream_config(st.session_state.streams)
                 continue
             
             # Handle scheduled time
@@ -626,7 +629,7 @@ def check_scheduled_streams():
                     channel_name = row.get('Channel', 'default')
                     if start_stream(row['Video'], row['Streaming Key'], row.get('Is Shorts', False), idx, quality, broadcast_id, channel_name):
                         st.session_state.streams.loc[idx, 'Jam Mulai'] = current_time
-                        save_persistent_streams(st.session_state.streams)
+                        save_stream_config(st.session_state.streams)
                         
             except Exception as e:
                 st.error(f"Error processing scheduled stream: {e}")
@@ -667,6 +670,38 @@ def calculate_time_difference(target_time_str):
     except Exception:
         return "Time calculation error"
 
+def export_config():
+    """Export all configurations to a single JSON file"""
+    try:
+        config = {
+            'streams': st.session_state.streams.to_dict('records'),
+            'channels': get_available_channels(),
+            'export_time': datetime.datetime.now().isoformat(),
+            'version': '1.0'
+        }
+        
+        config_json = json.dumps(config, indent=2)
+        return config_json
+    except Exception as e:
+        st.error(f"Error exporting config: {e}")
+        return None
+
+def import_config(config_json):
+    """Import configurations from JSON"""
+    try:
+        config = json.loads(config_json)
+        
+        # Import streams
+        if 'streams' in config:
+            streams_df = pd.DataFrame(config['streams'])
+            st.session_state.streams = streams_df
+            save_stream_config(streams_df)
+        
+        return True
+    except Exception as e:
+        st.error(f"Error importing config: {e}")
+        return False
+
 # Streamlit UI
 st.set_page_config(page_title="🎬 Multi-Channel YouTube Live Stream Manager", layout="wide")
 
@@ -676,8 +711,8 @@ st.markdown("---")
 # Auto-refresh for scheduled streams
 check_scheduled_streams()
 
-# Channel Management Tab
-tab1, tab2, tab3 = st.tabs(["📺 Stream Manager", "🔧 Channel Management", "📊 Dashboard"])
+# Main tabs
+tab1, tab2, tab3, tab4 = st.tabs(["📺 Stream Manager", "🔧 Channel Management", "📊 Dashboard", "⚙️ Configuration"])
 
 with tab2:
     st.header("🔧 Channel Management")
@@ -871,7 +906,7 @@ with tab1:
                             })
                             
                             st.session_state.streams = pd.concat([st.session_state.streams, new_stream], ignore_index=True)
-                            save_persistent_streams(st.session_state.streams)
+                            save_stream_config(st.session_state.streams)
                             st.success("✅ Stream added to manager!")
                             st.rerun()
                     else:
@@ -953,7 +988,7 @@ with tab1:
                     })
                     
                     st.session_state.streams = pd.concat([st.session_state.streams, new_stream], ignore_index=True)
-                    save_persistent_streams(st.session_state.streams)
+                    save_stream_config(st.session_state.streams)
                     st.success("✅ Stream added successfully!")
                     st.rerun()
 
@@ -1006,7 +1041,7 @@ with tab1:
                                 if start_stream(row['Video'], row['Streaming Key'], row.get('Is Shorts', False), idx, quality, broadcast_id, channel_name):
                                     st.session_state.streams.loc[idx, 'Status'] = 'Sedang Live'
                                     st.session_state.streams.loc[idx, 'Jam Mulai'] = format_jakarta_time(get_jakarta_time())
-                                    save_persistent_streams(st.session_state.streams)
+                                    save_stream_config(st.session_state.streams)
                                     st.rerun()
                         
                         elif row['Status'] == 'Sedang Live':
@@ -1019,7 +1054,7 @@ with tab1:
                             if row['Status'] == 'Sedang Live':
                                 stop_stream(idx)
                             st.session_state.streams = st.session_state.streams.drop(idx).reset_index(drop=True)
-                            save_persistent_streams(st.session_state.streams)
+                            save_stream_config(st.session_state.streams)
                             st.rerun()
                     
                     st.markdown("---")
@@ -1114,6 +1149,58 @@ with tab3:
     else:
         st.info("📝 No channels configured. Please add channels in the Channel Management tab.")
 
+with tab4:
+    st.header("⚙️ Configuration Management")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("📤 Export Configuration")
+        st.write("Export all your streams and channel configurations to a JSON file.")
+        
+        if st.button("📤 Export Config"):
+            config_json = export_config()
+            if config_json:
+                st.download_button(
+                    label="💾 Download Configuration",
+                    data=config_json,
+                    file_name=f"stream_config_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                    mime="application/json"
+                )
+    
+    with col2:
+        st.subheader("📥 Import Configuration")
+        st.write("Import stream configurations from a JSON file.")
+        
+        uploaded_config = st.file_uploader("📁 Upload Configuration File", type=['json'])
+        
+        if uploaded_config:
+            if st.button("📥 Import Config"):
+                try:
+                    config_content = uploaded_config.read().decode('utf-8')
+                    if import_config(config_content):
+                        st.success("✅ Configuration imported successfully!")
+                        st.rerun()
+                    else:
+                        st.error("❌ Failed to import configuration")
+                except Exception as e:
+                    st.error(f"❌ Error reading file: {e}")
+    
+    # Configuration files info
+    st.subheader("📋 Configuration Files")
+    
+    config_files = []
+    if os.path.exists('streams_config.json'):
+        config_files.append("streams_config.json - Stream configurations")
+    if os.path.exists('channel_config.json'):
+        config_files.append("channel_config.json - Channel settings")
+    
+    for file_info in config_files:
+        st.info(f"📄 {file_info}")
+    
+    if not config_files:
+        st.info("📝 No configuration files found.")
+
 # Footer
 st.markdown("---")
-st.markdown("🎬 **Multi-Channel YouTube Live Stream Manager** - Manage multiple YouTube channels with automated streaming")
+st.markdown("🎬 **Multi-Channel YouTube Live Stream Manager** - Manage multiple YouTube channels with automated RTMP streaming")
