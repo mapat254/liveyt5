@@ -758,7 +758,8 @@ with tab1:
         if not available_channels:
             st.warning("⚠️ No channels available. Please configure channels first.")
         else:
-            with st.form("broadcast_form"):
+            # Form for broadcast creation
+            with st.form("broadcast_creation_form"):
                 selected_channel = st.selectbox("📺 Select Channel", available_channels)
                 
                 # Show channel info
@@ -779,51 +780,39 @@ with tab1:
                 
                 st.write(f"🕐 Current Time: **{current_time_str}**")
                 
-                # Quick time buttons
-                col1, col2, col3, col4 = st.columns(4)
+                # Time selection options
+                time_option = st.radio(
+                    "⏰ Schedule Time",
+                    ["🚀 Start NOW", "⏰ +5 minutes", "⏰ +15 minutes", "⏰ +30 minutes", "🕐 Custom time"]
+                )
                 
-                with col1:
-                    now_button = st.form_submit_button("🚀 NOW")
+                # Custom time input (only show if custom is selected)
+                custom_time = None
+                if time_option == "🕐 Custom time":
+                    custom_time = st.time_input("🕐 Set custom time", value=jakarta_time.time())
                 
-                with col2:
-                    plus5_button = st.form_submit_button("⏰ +5min")
-                
-                with col3:
-                    plus15_button = st.form_submit_button("⏰ +15min")
-                
-                with col4:
-                    plus30_button = st.form_submit_button("⏰ +30min")
-                
-                # Manual time input
-                manual_time = st.time_input("🕐 Or set custom time", value=jakarta_time.time())
-                schedule_button = st.form_submit_button("📅 Schedule")
+                # Submit button
+                create_broadcast = st.form_submit_button("📺 Create Broadcast")
                 
                 # Process broadcast creation
-                broadcast_time = None
-                start_immediately = False
-                
-                if now_button:
-                    broadcast_time = jakarta_time.time()
-                    start_immediately = True
-                elif plus5_button:
-                    future_time = jakarta_time + datetime.timedelta(minutes=5)
-                    broadcast_time = future_time.time()
-                elif plus15_button:
-                    future_time = jakarta_time + datetime.timedelta(minutes=15)
-                    broadcast_time = future_time.time()
-                elif plus30_button:
-                    future_time = jakarta_time + datetime.timedelta(minutes=30)
-                    broadcast_time = future_time.time()
-                elif schedule_button:
-                    broadcast_time = manual_time
-                
-                if broadcast_time and selected_channel:
+                if create_broadcast and selected_channel:
                     with st.spinner(f"Creating YouTube broadcast on '{selected_channel}'..."):
-                        # Format time for API
-                        if start_immediately:
+                        # Determine broadcast time
+                        if time_option == "🚀 Start NOW":
                             time_str = "NOW"
+                        elif time_option == "⏰ +5 minutes":
+                            future_time = jakarta_time + datetime.timedelta(minutes=5)
+                            time_str = future_time.strftime('%H:%M')
+                        elif time_option == "⏰ +15 minutes":
+                            future_time = jakarta_time + datetime.timedelta(minutes=15)
+                            time_str = future_time.strftime('%H:%M')
+                        elif time_option == "⏰ +30 minutes":
+                            future_time = jakarta_time + datetime.timedelta(minutes=30)
+                            time_str = future_time.strftime('%H:%M')
+                        elif time_option == "🕐 Custom time" and custom_time:
+                            time_str = custom_time.strftime('%H:%M')
                         else:
-                            time_str = broadcast_time.strftime('%H:%M')
+                            time_str = "NOW"
                         
                         # Create broadcast
                         broadcast_id, stream_key, error = create_youtube_broadcast(
@@ -836,12 +825,57 @@ with tab1:
                             st.success(f"✅ Broadcast created successfully on '{selected_channel}'!")
                             st.info(f"🔑 Stream Key: `{stream_key}`")
                             st.info(f"🆔 Broadcast ID: `{broadcast_id}`")
+                            
+                            # Store broadcast info in session state for easy access
+                            if 'last_broadcast' not in st.session_state:
+                                st.session_state.last_broadcast = {}
+                            st.session_state.last_broadcast = {
+                                'broadcast_id': broadcast_id,
+                                'stream_key': stream_key,
+                                'channel': selected_channel,
+                                'time_str': time_str
+                            }
 
     # Main content area
     col1, col2 = st.columns([2, 1])
 
     with col1:
         st.header("📋 Stream Manager")
+        
+        # Quick add from last broadcast
+        if 'last_broadcast' in st.session_state and st.session_state.last_broadcast:
+            with st.expander("⚡ Quick Add from Last Broadcast", expanded=True):
+                last_bc = st.session_state.last_broadcast
+                st.info(f"📺 Channel: {last_bc['channel']} | 🔑 Key: {last_bc['stream_key'][:8]}****")
+                
+                with st.form("quick_add_form"):
+                    video_files = get_video_files()
+                    if video_files:
+                        selected_video = st.selectbox("📹 Select Video", video_files)
+                        quality = st.selectbox("🎥 Quality", ['240p', '360p', '480p', '720p', '1080p'], index=3)
+                        is_shorts = st.checkbox("📱 YouTube Shorts format")
+                        
+                        quick_add_submit = st.form_submit_button("⚡ Add to Stream Manager")
+                        
+                        if quick_add_submit:
+                            new_stream = pd.DataFrame({
+                                'Video': [selected_video],
+                                'Streaming Key': [last_bc['stream_key']],
+                                'Jam Mulai': [last_bc['time_str']],
+                                'Status': ['Menunggu'],
+                                'PID': [0],
+                                'Is Shorts': [is_shorts],
+                                'Quality': [quality],
+                                'Broadcast ID': [last_bc['broadcast_id']],
+                                'Channel': [last_bc['channel']]
+                            })
+                            
+                            st.session_state.streams = pd.concat([st.session_state.streams, new_stream], ignore_index=True)
+                            save_persistent_streams(st.session_state.streams)
+                            st.success("✅ Stream added to manager!")
+                            st.rerun()
+                    else:
+                        st.warning("⚠️ No video files found.")
         
         # Add new stream form
         with st.expander("➕ Add New Stream", expanded=False):
@@ -868,48 +902,44 @@ with tab1:
                 
                 st.write(f"🕐 Current Time: **{current_time_str}**")
                 
-                # Quick time selection
-                col_now, col_5, col_15, col_30 = st.columns(4)
+                # Time selection options
+                stream_time_option = st.radio(
+                    "⏰ Schedule Time",
+                    ["🚀 Start NOW", "⏰ +5 minutes", "⏰ +15 minutes", "⏰ +30 minutes", "🕐 Custom time"],
+                    key="stream_time_option"
+                )
                 
-                with col_now:
-                    now_stream_button = st.form_submit_button("🚀 NOW")
+                # Custom time input
+                stream_custom_time = None
+                if stream_time_option == "🕐 Custom time":
+                    stream_custom_time = st.time_input("🕐 Set custom time", value=jakarta_time.time(), key="stream_custom_time")
                 
-                with col_5:
-                    plus5_stream_button = st.form_submit_button("⏰ +5min")
-                
-                with col_15:
-                    plus15_stream_button = st.form_submit_button("⏰ +15min")
-                
-                with col_30:
-                    plus30_stream_button = st.form_submit_button("⏰ +30min")
-                
-                # Manual time input
-                manual_time = st.time_input("🕐 Or set custom time", value=jakarta_time.time())
                 quality = st.selectbox("🎥 Quality", ['240p', '360p', '480p', '720p', '1080p'], index=3)
                 is_shorts = st.checkbox("📱 YouTube Shorts format")
                 
-                add_stream_button = st.form_submit_button("📅 Add Stream")
+                add_stream_submit = st.form_submit_button("📅 Add Stream")
                 
                 # Process stream addition
-                schedule_time = None
-                
-                if now_stream_button:
-                    schedule_time = "NOW"
-                elif plus5_stream_button:
-                    future_time = jakarta_time + datetime.timedelta(minutes=5)
-                    schedule_time = format_jakarta_time(future_time)
-                elif plus15_stream_button:
-                    future_time = jakarta_time + datetime.timedelta(minutes=15)
-                    schedule_time = format_jakarta_time(future_time)
-                elif plus30_stream_button:
-                    future_time = jakarta_time + datetime.timedelta(minutes=30)
-                    schedule_time = format_jakarta_time(future_time)
-                elif add_stream_button:
-                    schedule_time = format_jakarta_time(
-                        jakarta_time.replace(hour=manual_time.hour, minute=manual_time.minute, second=0, microsecond=0)
-                    )
-                
-                if schedule_time and streaming_key and selected_channel:
+                if add_stream_submit and streaming_key and selected_channel:
+                    # Determine schedule time
+                    if stream_time_option == "🚀 Start NOW":
+                        schedule_time = "NOW"
+                    elif stream_time_option == "⏰ +5 minutes":
+                        future_time = jakarta_time + datetime.timedelta(minutes=5)
+                        schedule_time = format_jakarta_time(future_time)
+                    elif stream_time_option == "⏰ +15 minutes":
+                        future_time = jakarta_time + datetime.timedelta(minutes=15)
+                        schedule_time = format_jakarta_time(future_time)
+                    elif stream_time_option == "⏰ +30 minutes":
+                        future_time = jakarta_time + datetime.timedelta(minutes=30)
+                        schedule_time = format_jakarta_time(future_time)
+                    elif stream_time_option == "🕐 Custom time" and stream_custom_time:
+                        schedule_time = format_jakarta_time(
+                            jakarta_time.replace(hour=stream_custom_time.hour, minute=stream_custom_time.minute, second=0, microsecond=0)
+                        )
+                    else:
+                        schedule_time = "NOW"
+                    
                     new_stream = pd.DataFrame({
                         'Video': [selected_video],
                         'Streaming Key': [streaming_key],
