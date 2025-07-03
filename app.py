@@ -30,36 +30,57 @@ def format_jakarta_time(dt):
 
 def get_channel_credentials_path(channel_name):
     """Get credentials file path for specific channel"""
+    if channel_name == 'default':
+        return 'credentials.json'
     return f'credentials_{channel_name}.json'
 
 def get_channel_token_path(channel_name):
     """Get token file path for specific channel"""
+    if channel_name == 'default':
+        return 'token.json'
     return f'token_{channel_name}.json'
 
 def get_youtube_service(channel_name='default'):
     """Get authenticated YouTube service for specific channel"""
-    creds = None
-    token_path = get_channel_token_path(channel_name)
-    credentials_path = get_channel_credentials_path(channel_name)
-    
-    if os.path.exists(token_path):
-        creds = Credentials.from_authorized_user_file(token_path, SCOPES)
-    
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            if os.path.exists(credentials_path):
-                flow = InstalledAppFlow.from_client_secrets_file(credentials_path, SCOPES)
-                creds = flow.run_local_server(port=0)
-            else:
-                st.error(f"❌ {credentials_path} file not found! Please upload your YouTube API credentials for channel '{channel_name}'.")
-                return None
+    try:
+        creds = None
+        token_path = get_channel_token_path(channel_name)
+        credentials_path = get_channel_credentials_path(channel_name)
         
-        with open(token_path, 'w') as token:
-            token.write(creds.to_json())
+        if os.path.exists(token_path):
+            creds = Credentials.from_authorized_user_file(token_path, SCOPES)
+        
+        if not creds or not creds.valid:
+            if creds and creds.expired and creds.refresh_token:
+                try:
+                    creds.refresh(Request())
+                except Exception as e:
+                    st.error(f"❌ Token refresh failed for channel '{channel_name}': {str(e)}")
+                    return None
+            else:
+                if os.path.exists(credentials_path):
+                    try:
+                        flow = InstalledAppFlow.from_client_secrets_file(credentials_path, SCOPES)
+                        creds = flow.run_local_server(port=0)
+                    except Exception as e:
+                        st.error(f"❌ Authentication failed for channel '{channel_name}': {str(e)}")
+                        return None
+                else:
+                    st.warning(f"⚠️ {credentials_path} file not found! Please upload your YouTube API credentials for channel '{channel_name}'.")
+                    return None
+            
+            # Save credentials
+            try:
+                with open(token_path, 'w') as token:
+                    token.write(creds.to_json())
+            except Exception as e:
+                st.error(f"❌ Failed to save token for channel '{channel_name}': {str(e)}")
+        
+        return build('youtube', 'v3', credentials=creds)
     
-    return build('youtube', 'v3', credentials=creds)
+    except Exception as e:
+        st.error(f"❌ Error creating YouTube service for channel '{channel_name}': {str(e)}")
+        return None
 
 def get_channel_info(channel_name='default'):
     """Get channel information"""
@@ -83,7 +104,7 @@ def get_channel_info(channel_name='default'):
             }
         return None
     except Exception as e:
-        st.error(f"Error getting channel info for {channel_name}: {e}")
+        st.error(f"❌ Error getting channel info for '{channel_name}': {str(e)}")
         return None
 
 def create_youtube_broadcast(title, description, start_time_str, privacy_status='public', is_shorts=False, channel_name='default'):
@@ -323,14 +344,20 @@ def upload_thumbnail(video_id, thumbnail_path, channel_name='default'):
 def get_available_channels():
     """Get list of available channels based on credentials files"""
     channels = []
-    for file in os.listdir('.'):
-        if file.startswith('credentials_') and file.endswith('.json'):
-            channel_name = file.replace('credentials_', '').replace('.json', '')
-            channels.append(channel_name)
     
-    # Add default if credentials.json exists
-    if os.path.exists('credentials.json'):
-        channels.append('default')
+    try:
+        # Check for default credentials
+        if os.path.exists('credentials.json'):
+            channels.append('default')
+        
+        # Check for named channel credentials
+        for file in os.listdir('.'):
+            if file.startswith('credentials_') and file.endswith('.json'):
+                channel_name = file.replace('credentials_', '').replace('.json', '')
+                if channel_name not in channels:
+                    channels.append(channel_name)
+    except Exception as e:
+        st.error(f"Error scanning for channels: {e}")
     
     return sorted(channels)
 
@@ -405,6 +432,28 @@ def load_persistent_streams():
 # Load persistent streams on startup
 if st.session_state.streams.empty:
     st.session_state.streams = load_persistent_streams()
+
+def get_video_files():
+    """Get list of video files from current directory and videos folder"""
+    video_extensions = ['.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm']
+    video_files = []
+    
+    try:
+        # Check current directory
+        for file in os.listdir('.'):
+            if any(file.lower().endswith(ext) for ext in video_extensions):
+                video_files.append(file)
+        
+        # Check videos folder
+        if os.path.exists('videos'):
+            for file in os.listdir('videos'):
+                if any(file.lower().endswith(ext) for ext in video_extensions):
+                    video_files.append(f"videos/{file}")
+                    
+    except Exception as e:
+        st.error(f"Error reading video files: {e}")
+    
+    return sorted(video_files)
 
 def run_ffmpeg(video_path, streaming_key, is_shorts=False, stream_index=None, quality='720p', broadcast_id=None, channel_name='default'):
     """Run FFmpeg with proper YouTube streaming settings"""
@@ -582,28 +631,6 @@ def check_scheduled_streams():
             except Exception as e:
                 st.error(f"Error processing scheduled stream: {e}")
 
-def get_video_files():
-    """Get list of video files from current directory and videos folder"""
-    video_extensions = ['.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm']
-    video_files = []
-    
-    try:
-        # Check current directory
-        for file in os.listdir('.'):
-            if any(file.lower().endswith(ext) for ext in video_extensions):
-                video_files.append(file)
-        
-        # Check videos folder
-        if os.path.exists('videos'):
-            for file in os.listdir('videos'):
-                if any(file.lower().endswith(ext) for ext in video_extensions):
-                    video_files.append(f"videos/{file}")
-                    
-    except Exception as e:
-        st.error(f"Error reading video files: {e}")
-    
-    return sorted(video_files)
-
 def calculate_time_difference(target_time_str):
     """Calculate time difference for display"""
     try:
@@ -698,7 +725,7 @@ with tab2:
                             st.caption(f"📊 {channel_info['title']}")
                             st.caption(f"👥 {channel_info['subscribers']} subscribers | 🎥 {channel_info['videos']} videos")
                         else:
-                            st.caption("⚠️ Not authenticated")
+                            st.caption("⚠️ Authentication required")
                     
                     with col_actions:
                         if st.button(f"🗑️ Remove", key=f"remove_{channel}"):
@@ -1023,7 +1050,7 @@ with tab3:
                         st.metric("📊 Channel", channel_info['title'])
                         st.metric("👥 Subscribers", channel_info['subscribers'])
                     else:
-                        st.warning("⚠️ Not authenticated")
+                        st.warning("⚠️ Authentication required")
                 
                 with col2:
                     # Active streams for this channel
